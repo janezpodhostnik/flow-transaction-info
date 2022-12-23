@@ -1,4 +1,4 @@
-package main
+package registers
 
 import (
 	"encoding/csv"
@@ -9,70 +9,23 @@ import (
 	"os"
 )
 
-type registerKey struct {
-	owner string
-	key   string
-}
-
-func keyIsSlab(key string) bool {
-	return len(key) > 0 && key[0] == '$'
-}
-
-// encode key
-func (key registerKey) fromMangled() registerKey {
-	a := flow.BytesToAddress([]byte(key.owner))
-	var keyString string
-	// if slab
-	if keyIsSlab(key.key) {
-		keyString = "$" + hex.EncodeToString([]byte(key.key[1:]))
-	} else {
-		keyString = key.key
-	}
-
-	return registerKey{
-		owner: a.Hex(),
-		key:   keyString,
-	}
-}
-
-// decode key
-func (key registerKey) toMangled() registerKey {
-	a := flow.HexToAddress(key.owner)
-	var keyString string
-	// if slab
-	if len(key.key) > 0 && key.key[0] == '$' {
-		decoded, err := hex.DecodeString(key.key[1:])
-		if err != nil {
-			panic(err)
-		}
-		keyString = "$" + string(decoded)
-	} else {
-		keyString = string(key.key)
-	}
-
-	return registerKey{
-		owner: string(a.Bytes()),
-		key:   keyString,
-	}
-}
-
 type RemoteRegisterFileCache struct {
-	remoteGet   RemoteGetRegisterFunc
 	blockHeight uint64
-	registers   map[registerKey]flow.RegisterValue
+	registers   map[RegisterKey]flow.RegisterValue
 
 	log zerolog.Logger
 }
 
+var _ RegisterGetWrapper = &RemoteRegisterFileCache{}
+
 func NewRemoteRegisterFileCache(
-	remoteGet RemoteGetRegisterFunc,
 	blockHeight uint64,
 	log zerolog.Logger,
 ) (*RemoteRegisterFileCache, error) {
 	c := &RemoteRegisterFileCache{
-		remoteGet:   remoteGet,
 		blockHeight: blockHeight,
 		log:         log,
+		registers:   make(map[RegisterKey]flow.RegisterValue),
 	}
 	err := c.open()
 	if err != nil {
@@ -81,17 +34,19 @@ func NewRemoteRegisterFileCache(
 	return c, nil
 }
 
-func (c *RemoteRegisterFileCache) Get(owner, key string) (flow.RegisterValue, error) {
-	val, found := c.registers[registerKey{owner, key}]
-	if found {
+func (c *RemoteRegisterFileCache) Wrap(registerFunc RegisterGetRegisterFunc) RegisterGetRegisterFunc {
+	return func(owner string, key string) (flow.RegisterValue, error) {
+		val, found := c.registers[RegisterKey{owner, key}]
+		if found {
+			return val, nil
+		}
+		val, err := registerFunc(owner, key)
+		if err != nil {
+			return nil, err
+		}
+		c.registers[RegisterKey{owner, key}] = val
 		return val, nil
 	}
-	val, err := c.remoteGet(owner, key)
-	if err != nil {
-		return nil, err
-	}
-	c.registers[registerKey{owner, key}] = val
-	return val, nil
 }
 
 // Close the cache
@@ -117,9 +72,9 @@ func (c *RemoteRegisterFileCache) Close() error {
 	csvwriter := csv.NewWriter(csvFile)
 	defer csvwriter.Flush()
 	for key, val := range c.registers {
-		encodedKey := key.fromMangled()
+		encodedKey := key.ToReadable()
 		encodedValue := c.encodeRegisterValue(val)
-		err := csvwriter.Write([]string{encodedKey.owner, encodedKey.key, encodedValue})
+		err := csvwriter.Write([]string{encodedKey.Owner, encodedKey.Key, encodedValue})
 		if err != nil {
 			return err
 		}
@@ -129,10 +84,10 @@ func (c *RemoteRegisterFileCache) Close() error {
 
 // open opens the cache by loading registers from a file
 func (c *RemoteRegisterFileCache) open() error {
-
-	c.registers = make(map[registerKey]flow.RegisterValue)
-
 	filename := c.getFilename()
+
+	c.log.Info().Msgf("opening cache file: %s", filename)
+
 	csvFile, err := os.Open(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -142,8 +97,8 @@ func (c *RemoteRegisterFileCache) open() error {
 		}
 		return err
 	}
-	c.log.Info().Msgf("opening cache file: %s", filename)
 	defer func() { _ = csvFile.Close() }()
+
 	csvLines, err := csv.NewReader(csvFile).ReadAll()
 	if err != nil {
 		return err
@@ -159,7 +114,7 @@ func (c *RemoteRegisterFileCache) open() error {
 		if err != nil {
 			return err
 		}
-		decodedKey := registerKey{owner, key}.toMangled()
+		decodedKey := RegisterKey{owner, key}.ToMangled()
 		c.registers[decodedKey] = decodedValue
 	}
 

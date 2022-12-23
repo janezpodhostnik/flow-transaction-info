@@ -3,9 +3,10 @@ module github.com/janezpodhostnik/flow-transaction-info
 go 1.19
 
 require (
-	github.com/onflow/cadence v0.28.0
+	github.com/google/pprof v0.0.0-20220818150347-1763105d910c
+	github.com/onflow/cadence v0.28.1-0.20221223171403-ac91356b44aa
 	github.com/onflow/flow-dps v1.3.4-0.20220831153436-e9e0f57d6ce1
-	github.com/onflow/flow-go v0.28.17-0.20221219142843-efb541ccf267
+	github.com/onflow/flow-go v0.28.17-0.20221223175550-80a861fffa6d
 	github.com/rs/zerolog v1.28.0
 	google.golang.org/grpc v1.47.0
 )

@@ -2,20 +2,19 @@ package main
 
 import (
 	"fmt"
+	"github.com/janezpodhostnik/flow-transaction-info/registers"
 	"github.com/onflow/flow-go/fvm/state"
 	"github.com/onflow/flow-go/model/flow"
 )
-
-type RemoteGetRegisterFunc func(string, string) (flow.RegisterValue, error)
 
 type RemoteView struct {
 	Parent *RemoteView
 	Delta  map[string]flow.RegisterValue
 
-	getRemoteRegister RemoteGetRegisterFunc
+	getRemoteRegister registers.RegisterGetRegisterFunc
 }
 
-func NewRemoteView(getRemoteRegister RemoteGetRegisterFunc) *RemoteView {
+func NewRemoteView(getRemoteRegister registers.RegisterGetRegisterFunc) *RemoteView {
 
 	view := &RemoteView{
 		Delta:             make(map[string]flow.RegisterValue),
