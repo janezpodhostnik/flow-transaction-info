@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"github.com/hashicorp/go-multierror"
 	"github.com/janezpodhostnik/flow-transaction-info/registers"
 	"github.com/onflow/flow-dps/api/dps"
 	"github.com/onflow/flow-dps/codec/zbor"
@@ -11,6 +12,7 @@ import (
 	"github.com/onflow/flow-go/ledger/common/pathfinder"
 	"github.com/onflow/flow-go/ledger/complete"
 	"github.com/onflow/flow-go/model/flow"
+	"github.com/onflow/flow/protobuf/go/flow/execution"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -29,6 +31,11 @@ type TransactionDebugger struct {
 	directory string
 
 	log zerolog.Logger
+
+	registerGetWrappers []registers.RegisterGetWrapper
+
+	debugger    *RemoteDebugger
+	logHandlers []LogHandler
 }
 
 func NewTransactionDebugger(
@@ -56,9 +63,12 @@ type clientWithConnection struct {
 func (d *TransactionDebugger) RunTransaction(ctx context.Context) (txErr, processError error) {
 	d.log.Info().
 		Str("txID", d.txID.String()).
-		Msg("Running transaction. This may differ from how the transaction was actually run on the network.")
+		Msg("Re-running transaction. This may differ from how the transaction was originally run on the network," +
+			" due to the fact that some steps are skipped (signature verification, sequence number verification, ...)" +
+			" and that the transaction is run on the state as it at the beginning of the block " +
+			"(which might not have ben the case originally).")
 
-	client, err := d.getClient()
+	client, err := getClient(d.archiveHost, d.log)
 	if err != nil {
 		return nil, err
 	}
@@ -97,38 +107,24 @@ func (d *TransactionDebugger) RunTransaction(ctx context.Context) (txErr, proces
 	if err != nil {
 		return nil, err
 	}
-	registerReadWrapper := []registers.RegisterGetWrapper{
+	d.registerGetWrappers = []registers.RegisterGetWrapper{
 		cache,
 		registers.NewRemoteRegisterReadTracker(d.directory, d.log),
 		registers.NewCaptureContractWrapper(d.directory, d.log),
 	}
 
-	for _, wrapper := range registerReadWrapper {
+	for _, wrapper := range d.registerGetWrappers {
 		readFunc = wrapper.Wrap(readFunc)
 	}
 
 	view := NewRemoteView(readFunc)
 
-	logInterceptor := NewLogInterceptor(d.log, d.directory)
-	defer func() {
-		err := logInterceptor.Close()
-		if err != nil {
-			d.log.Warn().
-				Err(err).
-				Msg("Could not close log interceptor.")
-		}
-	}()
+	d.logHandlers = []LogHandler{NewIntensitiesLogHandler(d.log, d.directory)}
 
-	debugger := NewRemoteDebugger(view, d.chain, d.directory, d.log.Output(logInterceptor))
-	defer func(debugger *RemoteDebugger) {
-		err := debugger.Close()
-		if err != nil {
-			d.log.Warn().
-				Err(err).
-				Msg("Could not close debugger.")
-		}
-	}(debugger)
-
+	d.debugger = NewRemoteDebugger(view, d.chain, d.directory, d.log.Output(
+		&LogInterceptor{
+			handlers: d.logHandlers,
+		}))
 	codec := zbor.NewCodec()
 
 	txResult, err := client.GetTransaction(ctx, &dps.GetTransactionRequest{
@@ -151,32 +147,49 @@ func (d *TransactionDebugger) RunTransaction(ctx context.Context) (txErr, proces
 
 	err = d.dumpTransactionToFile(txBody)
 
-	txErr, err = debugger.RunTransaction(&txBody)
+	txErr, err = d.debugger.RunTransaction(&txBody)
 
-	for _, wrapper := range registerReadWrapper {
-		switch w := wrapper.(type) {
-		case io.Closer:
-			err := w.Close()
-			if err != nil {
-				d.log.Warn().
-					Err(err).
-					Msg("Could not close register read wrapper.")
-			}
-		}
-	}
+	_ = d.cleanup()
 
 	return txErr, err
 }
 
-func (d *TransactionDebugger) getClient() (clientWithConnection, error) {
+func (d *TransactionDebugger) cleanup() error {
+	var result *multierror.Error
+
+	err := d.debugger.Close()
+	if err != nil {
+		result = multierror.Append(result, err)
+	}
+
+	// close all log interceptors
+	for _, handler := range d.logHandlers {
+		switch w := handler.(type) {
+		case io.Closer:
+			result = multierror.Append(result, w.Close())
+		}
+	}
+
+	// close all the register read wrappers
+	for _, wrapper := range d.registerGetWrappers {
+		switch w := wrapper.(type) {
+		case io.Closer:
+			result = multierror.Append(result, w.Close())
+		}
+	}
+	return result.ErrorOrNil()
+}
+
+// getClient returns a client to the Archive API.
+func getClient(archiveHost string, log zerolog.Logger) (clientWithConnection, error) {
 	conn, err := grpc.Dial(
-		d.archiveHost,
+		archiveHost,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		d.log.Error().
+		log.Error().
 			Err(err).
-			Str("host", d.archiveHost).
+			Str("host", archiveHost).
 			Msg("Could not connect to server.")
 		return clientWithConnection{}, err
 	}
@@ -186,6 +199,32 @@ func (d *TransactionDebugger) getClient() (clientWithConnection, error) {
 		APIClient:  client,
 		ClientConn: conn,
 	}, nil
+}
+
+// getClient returns a client to the Archive API.
+func getExeClient(archiveHost string, log zerolog.Logger) (exeClientWithConnection, error) {
+	conn, err := grpc.Dial(
+		archiveHost,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("host", archiveHost).
+			Msg("Could not connect to server.")
+		return exeClientWithConnection{}, err
+	}
+	client := execution.NewExecutionAPIClient(conn)
+
+	return exeClientWithConnection{
+		ExecutionAPIClient: client,
+		ClientConn:         conn,
+	}, nil
+}
+
+type exeClientWithConnection struct {
+	execution.ExecutionAPIClient
+	*grpc.ClientConn
 }
 
 func (d *TransactionDebugger) getTransactionBlockHeight(ctx context.Context, client dps.APIClient) (uint64, error) {
@@ -230,7 +269,11 @@ func (d *TransactionDebugger) dumpTransactionToFile(body flow.TransactionBody) e
 	return err
 }
 
-type LogInterceptor struct {
+type LogHandler interface {
+	Handle(string) error
+}
+
+type IntensitiesLogHandler struct {
 	ComputationIntensities map[uint64]uint64 `json:"computationIntensities"`
 	MemoryIntensities      map[uint64]uint64 `json:"memoryIntensities"`
 
@@ -238,8 +281,12 @@ type LogInterceptor struct {
 	filename string
 }
 
-func NewLogInterceptor(log zerolog.Logger, directory string) *LogInterceptor {
-	return &LogInterceptor{
+type LogInterceptor struct {
+	handlers []LogHandler
+}
+
+func NewIntensitiesLogHandler(log zerolog.Logger, directory string) *IntensitiesLogHandler {
+	return &IntensitiesLogHandler{
 		ComputationIntensities: map[uint64]uint64{},
 		MemoryIntensities:      map[uint64]uint64{},
 		log:                    log,
@@ -255,21 +302,28 @@ type computationIntensitiesLog struct {
 }
 
 func (l *LogInterceptor) Write(p []byte) (n int, err error) {
-	if strings.Contains(string(p), "computationIntensities") {
-		var log computationIntensitiesLog
-		err := json.Unmarshal(p, &log)
+	for _, handler := range l.handlers {
+		err := handler.Handle(string(p))
 		if err != nil {
 			return 0, err
 		}
-		l.ComputationIntensities = log.ComputationIntensities
-		l.MemoryIntensities = log.MemoryIntensities
-
-		return len(p), nil
 	}
 	return len(p), nil
 }
+func (l *IntensitiesLogHandler) Handle(line string) error {
+	if strings.Contains(line, "computationIntensities") {
+		var log computationIntensitiesLog
+		err := json.Unmarshal([]byte(line), &log)
+		if err != nil {
+			return err
+		}
+		l.ComputationIntensities = log.ComputationIntensities
+		l.MemoryIntensities = log.MemoryIntensities
+	}
+	return nil
+}
 
-func (l *LogInterceptor) Close() error {
+func (l *IntensitiesLogHandler) Close() error {
 	err := os.MkdirAll(filepath.Dir(l.filename), os.ModePerm)
 	if err != nil {
 		return err

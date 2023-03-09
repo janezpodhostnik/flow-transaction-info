@@ -3,17 +3,12 @@ package main
 import (
 	"github.com/google/pprof/profile"
 	"github.com/onflow/cadence"
-	"github.com/onflow/cadence/runtime/ast"
-	"github.com/onflow/cadence/runtime/interpreter"
-	"github.com/onflow/flow-go/fvm/environment"
-	runtime2 "github.com/onflow/flow-go/fvm/runtime"
+	"github.com/onflow/flow-go/fvm"
 	"github.com/onflow/flow-go/fvm/state"
+	"github.com/onflow/flow-go/model/flow"
 	"github.com/rs/zerolog"
 	"os"
 	"path/filepath"
-
-	"github.com/onflow/flow-go/fvm"
-	"github.com/onflow/flow-go/model/flow"
 )
 
 type RemoteDebugger struct {
@@ -41,12 +36,6 @@ func NewRemoteDebugger(
 		fvm.WithLogger(logger),
 		fvm.WithChain(chain),
 		fvm.WithTransactionProcessors(fvm.NewTransactionInvoker()),
-		fvm.WithReusableCadenceRuntimePool(runtime2.NewReusableCadenceRuntimePool(
-			1,
-			runtime2.ReusableCadenceRuntimePoolConfig{
-				OnCadenceStatement: profileBuilder.OnCadenceStatement,
-			},
-		)),
 	)
 
 	return &RemoteDebugger{
@@ -68,9 +57,8 @@ func (d *RemoteDebugger) RunTransaction(txBody *flow.TransactionBody) (txErr, pr
 	return tx.Err, nil
 }
 
-func (d *RemoteDebugger) RunScript(code []byte, arguments [][]byte) (value cadence.Value, scriptError, processError error) {
+func (d *RemoteDebugger) RunScript(script *fvm.ScriptProcedure) (value cadence.Value, scriptError, processError error) {
 	scriptCtx := fvm.NewContextFromParent(d.ctx, fvm.WithBlockHeader(d.ctx.BlockHeader))
-	script := fvm.Script(code).WithArguments(arguments...)
 	err := d.vm.Run(scriptCtx, script, d.view)
 	if err != nil {
 		return nil, nil, err
@@ -86,6 +74,7 @@ type ProfileBuilder struct {
 	Profile            *profile.Profile
 	profileFunctionMap map[string]uint64
 	lastComputation    uint64
+	lastInteraction    uint64
 	profileLocationMap map[string]uint64
 
 	nextLocID uint64
@@ -99,10 +88,16 @@ func NewProfileBuilder(directory string) *ProfileBuilder {
 		Function: []*profile.Function{},
 		Location: []*profile.Location{},
 	}
-	p.SampleType = []*profile.ValueType{{
-		Type: "execution effort",
-		Unit: "effort",
-	}}
+	p.SampleType = []*profile.ValueType{
+		// {
+		// 	Type: "execution effort",
+		// 	Unit: "effort",
+		// },
+		{
+			Type: "interaction used",
+			Unit: "bytes",
+		},
+	}
 
 	return &ProfileBuilder{
 		Profile:            p,
@@ -138,94 +133,124 @@ func (p *ProfileBuilder) Close() error {
 	return nil
 }
 
-func (p *ProfileBuilder) OnCadenceStatement(fvmEnv runtime2.Environment, inter *interpreter.Interpreter, statement ast.Statement) {
-	stack := inter.CallStack()
-	if len(stack) == 0 {
-		// what now?
-		return
-	}
-
-	newComputation := fvmEnv.(environment.Environment).ComputationUsed()
-	computation := newComputation - p.lastComputation
-	p.lastComputation = newComputation
-
-	locationIds := make([]uint64, 0, len(stack))
-
-	// var lastFrame interpreter.Invocation
-	for _, frame := range stack {
-		// lastFrame = frame
-		fn := p.toFunction(inter, frame)
-		fnIndex, ok := p.profileFunctionMap[p.fnID(fn)]
-		if !ok {
-			p.Profile.Function = append(p.Profile.Function, fn)
-			p.Profile.Location = append(p.Profile.Location,
-				&profile.Location{
-					ID:      p.nextLocID + 1,
-					Address: p.nextLocID + 1,
-					Line: []profile.Line{
-						{
-							Function: fn,
-							Line:     fn.StartLine,
-						},
-					},
-				},
-			)
-			fnIndex = p.nextFunID
-			p.profileFunctionMap[p.fnID(fn)] = p.nextFunID
-			p.profileLocationMap[p.fnID(fn)] = p.nextLocID
-			p.nextFunID++
-			p.nextLocID++
-		}
-		locationIds = append(locationIds, fnIndex)
-	}
-
-	locations := make([]*profile.Location, 0, len(locationIds))
-	// revers iterate locations
-	for i := len(locationIds) - 1; i >= 0; i-- {
-		locations = append(locations, p.Profile.Location[locationIds[i]])
-	}
-
-	p.Profile.Sample = append(p.Profile.Sample, &profile.Sample{
-		Location: locations,
-		Value:    []int64{int64(computation)},
-	})
-}
-
-func (p *ProfileBuilder) fnID(fn *profile.Function) string {
-	return fn.Filename + "_" + fn.Name
-}
-
-func (p *ProfileBuilder) toFunction(inter *interpreter.Interpreter, frame interpreter.Invocation) *profile.Function {
-	filename := frame.Self.StaticType(inter).String()
-	name := ""
-	line := int64(0)
-
-	if frame.LocationRange.HasPosition != nil {
-		switch frame.LocationRange.HasPosition.(type) {
-		case *ast.InvocationExpression:
-			expression := frame.LocationRange.HasPosition.(*ast.InvocationExpression)
-			line = int64(expression.InvokedExpression.StartPosition().Line)
-
-			switch expression.InvokedExpression.(type) {
-			case *ast.MemberExpression:
-				me := expression.InvokedExpression.(*ast.MemberExpression)
-				name = me.Identifier.String()
-			case *ast.IdentifierExpression:
-				ie := expression.InvokedExpression.(*ast.IdentifierExpression)
-				name = ie.Identifier.String()
-			default:
-				panic("")
-			}
-		default:
-			panic("")
-		}
-	}
-
-	return &profile.Function{
-		ID:         p.nextFunID + 1,
-		Name:       name,
-		SystemName: name,
-		Filename:   filename,
-		StartLine:  line,
-	}
-}
+//
+// func (p *ProfileBuilder) OnCadenceStatement(fvmEnv runtime2.Environment, inter *interpreter.Interpreter, statement ast.Statement) {
+// 	stack := inter.CallStack()
+// 	if len(stack) == 0 {
+// 		// what now?
+// 		return
+// 	}
+//
+// 	// newComputation := fvmEnv.(environment.Environment).ComputationUsed()
+// 	// computation := newComputation - p.lastComputation
+// 	// p.lastComputation = newComputation
+//
+// 	newInteraction := fvmEnv.(environment.Environment).InteractionUsed()
+// 	interaction := newInteraction - p.lastInteraction
+// 	p.lastInteraction = newInteraction
+//
+// 	locationIds := make([]uint64, 0, len(stack))
+//
+// 	// var lastFrame interpreter.Invocation
+// 	for _, frame := range stack {
+// 		// lastFrame = frame
+// 		fn := p.toFunction(inter, frame)
+// 		if fn == nil {
+// 			continue
+// 		}
+// 		fnIndex, ok := p.profileFunctionMap[p.fnID(fn)]
+// 		if !ok {
+// 			p.Profile.Function = append(p.Profile.Function, fn)
+// 			p.Profile.Location = append(p.Profile.Location,
+// 				&profile.Location{
+// 					ID:      p.nextLocID + 1,
+// 					Address: p.nextLocID + 1,
+// 					Line: []profile.Line{
+// 						{
+// 							Function: fn,
+// 							Line:     fn.StartLine,
+// 						},
+// 					},
+// 				},
+// 			)
+// 			fnIndex = p.nextFunID
+// 			p.profileFunctionMap[p.fnID(fn)] = p.nextFunID
+// 			p.profileLocationMap[p.fnID(fn)] = p.nextLocID
+// 			p.nextFunID++
+// 			p.nextLocID++
+// 		}
+// 		locationIds = append(locationIds, fnIndex)
+// 	}
+//
+// 	locations := make([]*profile.Location, 0, len(locationIds))
+// 	// revers iterate locations
+// 	for i := len(locationIds) - 1; i >= 0; i-- {
+// 		locations = append(locations, p.Profile.Location[locationIds[i]])
+// 	}
+//
+// 	p.Profile.Sample = append(p.Profile.Sample, &profile.Sample{
+// 		Location: locations,
+// 		Value: []int64{
+// 			// int64(computation),
+// 			int64(interaction),
+// 		},
+// 	})
+// }
+//
+// func (p *ProfileBuilder) fnID(fn *profile.Function) string {
+// 	return fn.Filename + "_" + fn.Name
+// }
+//
+// func (p *ProfileBuilder) toFunction(inter *interpreter.Interpreter, frame interpreter.Invocation) *profile.Function {
+// 	filename := frame.Self.StaticType(inter).String()
+// 	name := ""
+// 	line := int64(0)
+//
+// 	if frame.LocationRange.HasPosition != nil {
+// 		switch frame.LocationRange.HasPosition.(type) {
+// 		case *ast.InvocationExpression:
+// 			expression := frame.LocationRange.HasPosition.(*ast.InvocationExpression)
+// 			line = int64(expression.InvokedExpression.StartPosition().Line)
+//
+// 			switch expression.InvokedExpression.(type) {
+// 			case *ast.MemberExpression:
+// 				me := expression.InvokedExpression.(*ast.MemberExpression)
+// 				name = me.Identifier.String()
+// 			case *ast.IdentifierExpression:
+// 				ie := expression.InvokedExpression.(*ast.IdentifierExpression)
+// 				name = ie.Identifier.String()
+// 			default:
+// 				panic("")
+// 			}
+// 		default:
+// 			field := reflect.ValueOf(inter).Elem().FieldByName("statement")
+//
+// 			statement := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface().(ast.Statement)
+//
+// 			switch statement.(type) {
+// 			case *ast.VariableDeclaration:
+// 				return nil
+// 			case *ast.AssignmentStatement:
+// 				return nil
+// 			case *ast.ReturnStatement:
+// 				return nil
+// 			case *ast.IfStatement:
+// 				return nil
+// 			}
+//
+// 			line = int64(statement.StartPosition().Line)
+// 			name = statement.String()
+//
+// 			println("unknown type")
+//
+// 		}
+// 	}
+//
+// 	return &profile.Function{
+// 		ID:         p.nextFunID + 1,
+// 		Name:       name,
+// 		SystemName: name,
+// 		Filename:   filename,
+// 		StartLine:  line,
+// 	}
+// }
