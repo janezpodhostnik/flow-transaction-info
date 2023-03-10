@@ -5,9 +5,12 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/janezpodhostnik/flow-transaction-info/registers"
 	"github.com/onflow/cadence"
+	"github.com/onflow/flow-archive/api/archive"
+	"github.com/onflow/flow-go/engine/execution/state"
 	"github.com/onflow/flow-go/fvm"
+	"github.com/onflow/flow-go/ledger/common/pathfinder"
+	"github.com/onflow/flow-go/ledger/complete"
 	"github.com/onflow/flow-go/model/flow"
-	"github.com/onflow/flow/protobuf/go/flow/execution"
 	"github.com/rs/zerolog"
 	"io"
 	"os"
@@ -15,8 +18,8 @@ import (
 )
 
 type ScriptDebugger struct {
-	script *fvm.ScriptProcedure
-	// blockHeight uint64
+	script      *fvm.ScriptProcedure
+	blockHeight uint64
 	archiveHost string
 	chain       flow.Chain
 
@@ -32,14 +35,14 @@ type ScriptDebugger struct {
 
 func NewScriptDebugger(
 	script *fvm.ScriptProcedure,
-	// blockHeight uint64,
+	blockHeight uint64,
 	archiveHost string,
 	chain flow.Chain,
 	logger zerolog.Logger) *ScriptDebugger {
 
 	return &ScriptDebugger{
-		script: script,
-		// blockHeight: blockHeight,
+		script:      script,
+		blockHeight: blockHeight,
 		archiveHost: archiveHost,
 		chain:       chain,
 
@@ -51,7 +54,7 @@ func NewScriptDebugger(
 
 func (d *ScriptDebugger) RunScript(ctx context.Context) (value cadence.Value, txErr, processError error) {
 
-	client, err := getExeClient(d.archiveHost, d.log)
+	client, err := getClient(d.archiveHost, d.log)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -64,28 +67,32 @@ func (d *ScriptDebugger) RunScript(ctx context.Context) (value cadence.Value, tx
 		}
 	}()
 
-	header, err := client.GetLatestBlockHeader(ctx, &execution.GetLatestBlockHeaderRequest{})
-	if err != nil {
-		return nil, nil, err
-	}
-	blockId := header.Block.Id
+	// last, err := client.GetLast(ctx, &archive.GetLastRequest{})
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
+	// blockHeight := last.Height
+
+	blockHeight := d.blockHeight
 
 	readFunc := func(address string, key string) (flow.RegisterValue, error) {
-
-		resp, err := client.GetRegisterAtBlockID(ctx, &execution.GetRegisterAtBlockIDRequest{
-			BlockId:       blockId,
-			RegisterOwner: []byte(address),
-			RegisterKey:   []byte(key),
-		})
+		ledgerKey := state.RegisterIDToKey(flow.RegisterID{Key: key, Owner: address})
+		ledgerPath, err := pathfinder.KeyToPath(ledgerKey, complete.DefaultPathFinderVersion)
 		if err != nil {
-			d.log.Warn().Err(err).Msg("Could not get register value.")
 			return nil, err
 		}
 
-		return resp.Value, nil
+		resp, err := client.GetRegisterValues(ctx, &archive.GetRegisterValuesRequest{
+			Height: blockHeight,
+			Paths:  [][]byte{ledgerPath[:]},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return resp.Values[0], nil
 	}
 
-	cache, err := registers.NewRemoteRegisterFileCache(header.Block.Height, d.log)
+	cache, err := registers.NewRemoteRegisterFileCache(blockHeight, d.log)
 	if err != nil {
 		return nil, nil, err
 	}

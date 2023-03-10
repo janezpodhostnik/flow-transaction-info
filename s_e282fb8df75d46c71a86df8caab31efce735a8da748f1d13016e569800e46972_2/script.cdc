@@ -1,64 +1,4 @@
-package main
 
-import (
-	"context"
-	"os"
-
-	"github.com/onflow/cadence"
-	"github.com/onflow/flow-go/fvm"
-	"github.com/onflow/flow-go/model/flow"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
-
-	jsoncdc "github.com/onflow/cadence/encoding/json"
-)
-
-//
-// func main() {
-// 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-//
-// 	var host string
-// 	flag.StringVar(&host, "host", "", "host url with port")
-//
-// 	var tx string
-// 	flag.StringVar(&tx, "tx", "", "transaction id")
-//
-// 	var chainStr string
-// 	flag.StringVar(&chainStr, "chain", "flow-mainnet", "chain id (flow-mainnet, flow-testnet, ...)")
-//
-// 	flag.Parse()
-//
-// 	txid, err := flow.HexStringToIdentifier(tx)
-// 	if err != nil {
-// 		log.Error().
-// 			Err(err).
-// 			Msg("Could not parse transaction ID.")
-// 		return
-// 	}
-//
-// 	chainID := flow.ChainID(chainStr)
-// 	ctx := context.Background()
-//
-// 	txDebugger := NewTransactionDebugger(txid, host, chainID.Chain(), log.Logger)
-//
-// 	txErr, err := txDebugger.RunTransaction(ctx)
-//
-// 	if txErr != nil {
-// 		log.Error().
-// 			Err(txErr).
-// 			Msg("Transaction error.")
-// 		return
-// 	}
-// 	if err != nil {
-// 		log.Error().
-// 			Err(err).
-// 			Msg("Implementation error.")
-// 		return
-// 	}
-// }
-
-func main() {
-	scriptCode := `
 import MetadataViews from 0x1d7e57aa55817448
 import NFTCatalog from 0x49a7cda3a1eecc29
 import NFTRetrieval from 0x49a7cda3a1eecc29
@@ -154,11 +94,12 @@ pub struct NFT {
 
  pub fun getAllMetadataViewsFromCap(tokenID: UInt64, collectionIdentifier: String, collectionCap: Capability<&AnyResource{MetadataViews.ResolverCollection}>): {String: AnyStruct} {
     pre {
-        NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier) != nil : "Invalid collection identifier"
+        NFTCatalog.getCatalog()[collectionIdentifier] != nil : "Invalid collection identifier"
     }
 
-    let value = NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier)!
+    let catalog = NFTCatalog.getCatalog()
     let items: {String: AnyStruct} = {}
+    let value = catalog[collectionIdentifier]!
 
     // Check if we have multiple collections for the NFT type...
     let hasMultipleCollections = false
@@ -184,42 +125,14 @@ pub struct NFT {
     return items
 }
 
-pub fun getNFTViewsFromIDs(collectionIdentifier : String, ids: [UInt64], collectionCap : Capability<&AnyResource{MetadataViews.ResolverCollection}>) : [MetadataViews.NFTView] {
-        pre {
-            NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier) != nil : "Invalid collection identifier"
-        }
-
-        let value = NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier)!
-        let items : [MetadataViews.NFTView] = []
-
-        // Check if we have multiple collections for the NFT type...
-        let hasMultipleCollections = false
-
-         if collectionCap.check() {
-            let collectionRef = collectionCap.borrow()!
-            for id in ids {
-                if !collectionRef.getIDs().contains(id) {
-                    continue
-                }
-                let nftResolver = collectionRef.borrowViewResolver(id: id)
-                let nftViews = MetadataViews.getNFTView(id: id, viewResolver: nftResolver)
-                if !hasMultipleCollections {
-                    items.append(nftViews)
-                } else if nftViews.display!.name == value.collectionDisplay.name {
-                    items.append(nftViews)
-                }
-            
-            }
-        }
-
-
-        return items
-    }
-
 pub fun main(ownerAddress: Address, collectionIdentifier: String, tokenID: UInt64) : NFT? {
+    let catalog = NFTCatalog.getCatalog()
+
+    assert(catalog.containsKey(collectionIdentifier), message: "Invalid Collection")
+
     let account = getAuthAccount(ownerAddress)
 
-    let value = NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier)!
+    let value = catalog[collectionIdentifier]!
     let identifierHash = String.encodeHex(HashAlgorithm.SHA3_256.hash(collectionIdentifier.utf8))
     let tempPathStr = "catalog".concat(identifierHash)
     let tempPublicPath = PublicPath(identifier: tempPathStr)!
@@ -244,7 +157,7 @@ pub fun main(ownerAddress: Address, collectionIdentifier: String, tokenID: UInt6
 
     allViews.insert(key: Type<MetadataViews.NFTCollectionData>().identifier, collectionDataView)
 
-    let views = getNFTViewsFromIDs(collectionIdentifier: collectionIdentifier,ids: [], collectionCap: collectionCap)
+    let views = NFTRetrieval.getNFTViewsFromIDs(collectionIdentifier: collectionIdentifier,ids: [], collectionCap: collectionCap)
 
     for view in views {
         if view.id == tokenID {
@@ -285,39 +198,4 @@ pub fun main(ownerAddress: Address, collectionIdentifier: String, tokenID: UInt6
     }
 
     return nil
-}`
-
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	// blockHeight := uint64(44151459)
-	host := "archive.mainnet.nodes.onflow.org:9000"
-	chain := flow.Testnet.Chain()
-
-	script := fvm.NewScriptWithContextAndArgs(
-		[]byte(scriptCode),
-		context.Background(),
-		jsoncdc.MustEncode(cadence.NewAddress(flow.HexToAddress("0x04d0ad2a48fe9312"))),
-		jsoncdc.MustEncode(cadence.String("NBATopShot")),
-		jsoncdc.MustEncode(cadence.UInt64(38501733)),
-	)
-
-	scriptDebugger := NewScriptDebugger(
-		script,
-		48112780,
-		host,
-		chain,
-		log.Logger)
-	ctx := context.Background()
-	_, scriptErr, err := scriptDebugger.RunScript(ctx)
-	if scriptErr != nil {
-		log.Error().
-			Err(scriptErr).
-			Msg("Transaction error.")
-		return
-	}
-	if err != nil {
-		log.Error().
-			Err(err).
-			Msg("Implementation error.")
-		return
-	}
 }

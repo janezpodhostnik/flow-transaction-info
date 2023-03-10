@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"github.com/hashicorp/go-multierror"
 	"github.com/janezpodhostnik/flow-transaction-info/registers"
-	"github.com/onflow/flow-dps/api/dps"
-	"github.com/onflow/flow-dps/codec/zbor"
+	"github.com/onflow/flow-archive/api/archive"
+	"github.com/onflow/flow-archive/codec/zbor"
 	"github.com/onflow/flow-go/engine/execution/state"
 	"github.com/onflow/flow-go/ledger/common/pathfinder"
 	"github.com/onflow/flow-go/ledger/complete"
@@ -56,7 +56,7 @@ func NewTransactionDebugger(
 }
 
 type clientWithConnection struct {
-	dps.APIClient
+	archive.APIClient
 	*grpc.ClientConn
 }
 
@@ -93,7 +93,7 @@ func (d *TransactionDebugger) RunTransaction(ctx context.Context) (txErr, proces
 			return nil, err
 		}
 
-		resp, err := client.GetRegisterValues(ctx, &dps.GetRegisterValuesRequest{
+		resp, err := client.GetRegisterValues(ctx, &archive.GetRegisterValuesRequest{
 			Height: blockHeight,
 			Paths:  [][]byte{ledgerPath[:]},
 		})
@@ -127,7 +127,7 @@ func (d *TransactionDebugger) RunTransaction(ctx context.Context) (txErr, proces
 		}))
 	codec := zbor.NewCodec()
 
-	txResult, err := client.GetTransaction(ctx, &dps.GetTransactionRequest{
+	txResult, err := client.GetTransaction(ctx, &archive.GetTransactionRequest{
 		TransactionID: d.txID[:],
 	})
 	if err != nil {
@@ -193,7 +193,7 @@ func getClient(archiveHost string, log zerolog.Logger) (clientWithConnection, er
 			Msg("Could not connect to server.")
 		return clientWithConnection{}, err
 	}
-	client := dps.NewAPIClient(conn)
+	client := archive.NewAPIClient(conn)
 
 	return clientWithConnection{
 		APIClient:  client,
@@ -227,9 +227,9 @@ type exeClientWithConnection struct {
 	*grpc.ClientConn
 }
 
-func (d *TransactionDebugger) getTransactionBlockHeight(ctx context.Context, client dps.APIClient) (uint64, error) {
+func (d *TransactionDebugger) getTransactionBlockHeight(ctx context.Context, client archive.APIClient) (uint64, error) {
 
-	resp, err := client.GetHeightForTransaction(ctx, &dps.GetHeightForTransactionRequest{
+	resp, err := client.GetHeightForTransaction(ctx, &archive.GetHeightForTransactionRequest{
 		TransactionID: d.txID[:],
 	})
 	if err != nil {
