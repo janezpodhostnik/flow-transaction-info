@@ -2,315 +2,149 @@ package main
 
 import (
 	"context"
+	"github.com/onflow/cadence"
+	"github.com/onflow/cadence/encoding/json"
 	"os"
 
-	"github.com/onflow/cadence"
-	"github.com/onflow/flow-go/fvm"
-	"github.com/onflow/flow-go/model/flow"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	jsoncdc "github.com/onflow/cadence/encoding/json"
+	"github.com/onflow/flow-go/model/flow"
 )
 
-//
-// func main() {
-// 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-//
-// 	var host string
-// 	flag.StringVar(&host, "host", "", "host url with port")
-//
-// 	var tx string
-// 	flag.StringVar(&tx, "tx", "", "transaction id")
-//
-// 	var chainStr string
-// 	flag.StringVar(&chainStr, "chain", "flow-mainnet", "chain id (flow-mainnet, flow-testnet, ...)")
-//
-// 	flag.Parse()
-//
-// 	txid, err := flow.HexStringToIdentifier(tx)
-// 	if err != nil {
-// 		log.Error().
-// 			Err(err).
-// 			Msg("Could not parse transaction ID.")
-// 		return
-// 	}
-//
-// 	chainID := flow.ChainID(chainStr)
-// 	ctx := context.Background()
-//
-// 	txDebugger := NewTransactionDebugger(txid, host, chainID.Chain(), log.Logger)
-//
-// 	txErr, err := txDebugger.RunTransaction(ctx)
-//
-// 	if txErr != nil {
-// 		log.Error().
-// 			Err(txErr).
-// 			Msg("Transaction error.")
-// 		return
-// 	}
-// 	if err != nil {
-// 		log.Error().
-// 			Err(err).
-// 			Msg("Implementation error.")
-// 		return
-// 	}
-// }
-
 func main() {
-	scriptCode := `
-import MetadataViews from 0x1d7e57aa55817448
-import NFTCatalog from 0x49a7cda3a1eecc29
-import NFTRetrieval from 0x49a7cda3a1eecc29
-
-pub struct NFTCollectionData {
-    pub let storagePath: StoragePath
-    pub let publicPath: PublicPath
-    pub let privatePath: PrivatePath
-    pub let publicLinkedType: Type
-    pub let privateLinkedType: Type
-
-    init(
-        storagePath: StoragePath,
-        publicPath: PublicPath,
-        privatePath: PrivatePath,
-        publicLinkedType: Type,
-        privateLinkedType: Type,
-    ) {
-        self.storagePath = storagePath
-        self.publicPath = publicPath
-        self.privatePath = privatePath
-        self.publicLinkedType = publicLinkedType
-        self.privateLinkedType = privateLinkedType
-    }
-}
-
-pub struct NFT {
-    pub let id: UInt64
-    pub let uuid : UInt64
-    pub let name: String
-    pub let description: String
-    pub let thumbnail: String
-    pub let externalURL: String
-    pub let storagePath: StoragePath
-    pub let publicPath: PublicPath
-    pub let privatePath: PrivatePath
-    pub let publicLinkedType: Type
-    pub let privateLinkedType: Type
-    pub let collectionName: String
-    pub let collectionDescription: String
-    pub let collectionSquareImage: String
-    pub let collectionBannerImage: String
-    pub let collectionExternalURL: String
-    pub let allViews:  {String: AnyStruct}?
-    pub let royalties: [MetadataViews.Royalty]
-    pub let collectionSocials: {String : MetadataViews.ExternalURL}
-    pub let traits : MetadataViews.Traits?
-
-    init(
-        id: UInt64,
-        uuid : UInt64,
-        name: String,
-        description: String,
-        thumbnail: String,
-        externalURL: String,
-        storagePath: StoragePath,
-        publicPath: PublicPath,
-        privatePath: PrivatePath,
-        publicLinkedType: Type,
-        privateLinkedType: Type,
-        collectionName: String,
-        collectionDescription: String,
-        collectionSquareImage: String,
-        collectionBannerImage: String,
-        collectionExternalURL: String,
-        allViews: {String: AnyStruct}?,
-        royalties: [MetadataViews.Royalty],
-        collectionSocials: {String: MetadataViews.ExternalURL},
-        traits : MetadataViews.Traits?
-    ) {
-        self.id = id
-        self.uuid = uuid
-        self.name = name
-        self.description = description
-        self.thumbnail = thumbnail
-        self.externalURL = externalURL
-        self.storagePath = storagePath
-        self.publicPath = publicPath
-        self.privatePath = privatePath
-        self.publicLinkedType = publicLinkedType
-        self.privateLinkedType = privateLinkedType
-        self.collectionName = collectionName
-        self.collectionDescription = collectionDescription
-        self.collectionSquareImage = collectionSquareImage
-        self.collectionBannerImage = collectionBannerImage
-        self.collectionExternalURL = collectionExternalURL
-        self.allViews = allViews
-        self.royalties = royalties
-        self.collectionSocials = collectionSocials
-        self.traits = traits
-    }
-}
-
- pub fun getAllMetadataViewsFromCap(tokenID: UInt64, collectionIdentifier: String, collectionCap: Capability<&AnyResource{MetadataViews.ResolverCollection}>): {String: AnyStruct} {
-    pre {
-        NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier) != nil : "Invalid collection identifier"
-    }
-
-    let value = NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier)!
-    let items: {String: AnyStruct} = {}
-
-    // Check if we have multiple collections for the NFT type...
-    let hasMultipleCollections = false
-
-    if collectionCap.check() {
-        let collectionRef = collectionCap.borrow()!
-
-        let nftResolver = collectionRef.borrowViewResolver(id: tokenID)
-        let supportedNftViewTypes = nftResolver.getViews()
-
-        for supportedViewType in supportedNftViewTypes {
-            if let view = nftResolver.resolveView(supportedViewType) {
-                if !hasMultipleCollections {
-                    items.insert(key: supportedViewType.identifier, view)
-                } else if MetadataViews.getDisplay(nftResolver)!.name == value.collectionDisplay.name {
-                    items.insert(key: supportedViewType.identifier, view)
-                }
-            }
-        }
-
-    }
-
-    return items
-}
-
-pub fun getNFTViewsFromIDs(collectionIdentifier : String, ids: [UInt64], collectionCap : Capability<&AnyResource{MetadataViews.ResolverCollection}>) : [MetadataViews.NFTView] {
-        pre {
-            NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier) != nil : "Invalid collection identifier"
-        }
-
-        let value = NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier)!
-        let items : [MetadataViews.NFTView] = []
-
-        // Check if we have multiple collections for the NFT type...
-        let hasMultipleCollections = false
-
-         if collectionCap.check() {
-            let collectionRef = collectionCap.borrow()!
-            for id in ids {
-                if !collectionRef.getIDs().contains(id) {
-                    continue
-                }
-                let nftResolver = collectionRef.borrowViewResolver(id: id)
-                let nftViews = MetadataViews.getNFTView(id: id, viewResolver: nftResolver)
-                if !hasMultipleCollections {
-                    items.append(nftViews)
-                } else if nftViews.display!.name == value.collectionDisplay.name {
-                    items.append(nftViews)
-                }
-            
-            }
-        }
-
-
-        return items
-    }
-
-pub fun main(ownerAddress: Address, collectionIdentifier: String, tokenID: UInt64) : NFT? {
-    let account = getAuthAccount(ownerAddress)
-
-    let value = NFTCatalog.getCatalogEntry(collectionIdentifier: collectionIdentifier)!
-    let identifierHash = String.encodeHex(HashAlgorithm.SHA3_256.hash(collectionIdentifier.utf8))
-    let tempPathStr = "catalog".concat(identifierHash)
-    let tempPublicPath = PublicPath(identifier: tempPathStr)!
-
-    account.link<&{MetadataViews.ResolverCollection}>(
-        tempPublicPath,
-        target: value.collectionData.storagePath
-    )
-
-    let collectionCap = account.getCapability<&AnyResource{MetadataViews.ResolverCollection}>(tempPublicPath)
-    assert(collectionCap.check(), message: "MetadataViews Collection is not set up properly, ensure the Capability was created/linked correctly.")
-
-    let allViews = getAllMetadataViewsFromCap(tokenID: tokenID, collectionIdentifier: collectionIdentifier, collectionCap: collectionCap)
-    let nftCollectionDisplayView = allViews[Type<MetadataViews.NFTCollectionData>().identifier] as! MetadataViews.NFTCollectionData?
-    let collectionDataView = NFTCollectionData(
-        storagePath: nftCollectionDisplayView!.storagePath,
-        publicPath: nftCollectionDisplayView!.publicPath,
-        privatePath: nftCollectionDisplayView!.providerPath,
-        publicLinkedType: nftCollectionDisplayView!.publicLinkedType,
-        privateLinkedType: nftCollectionDisplayView!.providerLinkedType,
-    )
-
-    allViews.insert(key: Type<MetadataViews.NFTCollectionData>().identifier, collectionDataView)
-
-    let views = getNFTViewsFromIDs(collectionIdentifier: collectionIdentifier,ids: [], collectionCap: collectionCap)
-
-    for view in views {
-        if view.id == tokenID {
-            let displayView = view.display
-            let externalURLView = view.externalURL
-            let collectionDataView = view.collectionData
-            let collectionDisplayView = view.collectionDisplay
-            let royaltyView = view.royalties
-
-            if (displayView == nil || externalURLView == nil || collectionDataView == nil || collectionDisplayView == nil || royaltyView == nil) {
-                // Bad NFT. Skipping....
-                return nil
-            }
-
-            return NFT(
-                id: view.id,
-                uuid: view.uuid,
-                name: displayView!.name,
-                description: displayView!.description,
-                thumbnail: displayView!.thumbnail.uri(),
-                externalURL: externalURLView!.url,
-                storagePath: collectionDataView!.storagePath,
-                publicPath: collectionDataView!.publicPath,
-                privatePath: collectionDataView!.providerPath,
-                publicLinkedType: collectionDataView!.publicLinkedType,
-                privateLinkedType: collectionDataView!.providerLinkedType,
-                collectionName: collectionDisplayView!.name,
-                collectionDescription: collectionDisplayView!.description,
-                collectionSquareImage: collectionDisplayView!.squareImage.file.uri(),
-                collectionBannerImage: collectionDisplayView!.bannerImage.file.uri(),
-                collectionExternalURL: collectionDisplayView!.externalURL.url,
-                allViews: allViews,
-                royalties: royaltyView!.getRoyalties(),
-                collectionSocials: collectionDisplayView!.socials,
-                traits: view.traits
-            )
-        }
-    }
-
-    return nil
-}`
-
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
-	// blockHeight := uint64(44151459)
-	host := "archive.mainnet.nodes.onflow.org:9000"
-	chain := flow.Testnet.Chain()
 
-	script := fvm.NewScriptWithContextAndArgs(
-		[]byte(scriptCode),
-		context.Background(),
-		jsoncdc.MustEncode(cadence.NewAddress(flow.HexToAddress("0x04d0ad2a48fe9312"))),
-		jsoncdc.MustEncode(cadence.String("NBATopShot")),
-		jsoncdc.MustEncode(cadence.UInt64(38501733)),
-	)
+	host := ""
 
-	scriptDebugger := NewScriptDebugger(
-		script,
-		48112780,
-		host,
-		chain,
-		log.Logger)
 	ctx := context.Background()
-	_, scriptErr, err := scriptDebugger.RunScript(ctx)
-	if scriptErr != nil {
+	chainID := flow.Testnet
+
+	var remoteData RemoteData
+
+	remoteData, err := NewExecutionDataClient(host, log.Logger)
+	if err != nil {
 		log.Error().
-			Err(scriptErr).
+			Err(err).
+			Msg("Could not connect to execution node.")
+		return
+	}
+
+	defer func(remoteData RemoteData) {
+		err := remoteData.Close()
+		if err != nil {
+			log.Error().
+				Err(err).
+				Msg("Could not close remote data.")
+		}
+	}(remoteData)
+
+	txID, _ := flow.HexStringToIdentifier("981fd6a429fdc931fa24b565da5ccf026cbd28a91cd2c61679f70aa40edfe017")
+	blockId, _ := flow.HexStringToIdentifier("c690fd56d45b350c2e26c3925dc4b3a3d7fe46c07d403e618553963842450aad")
+
+	txDebugger := NewTransactionDebugger(txID, remoteData, chainID.Chain(), log.Logger)
+
+	tx :=
+		flow.NewTransactionBody().
+			SetScript([]byte(`
+import FLOAT from 0x0afe396ebc8eee65
+import NonFungibleToken from 0x631e88ae7f1d7c20
+import MetadataViews from 0x631e88ae7f1d7c20
+import GrantedAccountAccess from 0x0afe396ebc8eee65
+import ChildAccount from 0x1b655847a90e644a
+
+transaction(
+  pubKey: String,
+  fundingAmt: UFix64,
+  childAccountName: String,
+  childAccountDescription: String,
+  clientIconURL: String,
+  clientExternalURL: String
+) {
+
+  prepare(signer: AuthAccount) {
+    // Save a ChildAccountCreator if none exists
+    if signer.borrow<&ChildAccount.ChildAccountCreator>(from: ChildAccount.ChildAccountCreatorStoragePath) == nil {
+      signer.save(<-ChildAccount.createChildAccountCreator(), to: ChildAccount.ChildAccountCreatorStoragePath)
+    }
+    // Link the public Capability so signer can query address on public key
+    if !signer.getCapability<
+        &ChildAccount.ChildAccountCreator{ChildAccount.ChildAccountCreatorPublic}
+      >(ChildAccount.ChildAccountCreatorPublicPath).check() {
+      // Unlink & Link
+      signer.unlink(ChildAccount.ChildAccountCreatorPublicPath)
+      signer.link<
+        &ChildAccount.ChildAccountCreator{ChildAccount.ChildAccountCreatorPublic}
+      >(
+        ChildAccount.ChildAccountCreatorPublicPath,
+        target: ChildAccount.ChildAccountCreatorStoragePath
+      )
+    }
+    // Get a reference to the ChildAccountCreator
+    let creatorRef = signer.borrow<&ChildAccount.ChildAccountCreator>(
+        from: ChildAccount.ChildAccountCreatorStoragePath
+      ) ?? panic("Problem getting a ChildAccountCreator reference!")
+    // Construct the ChildAccountInfo metadata struct
+    let info = ChildAccount.ChildAccountInfo(
+        name: childAccountName,
+        description: childAccountDescription,
+        clientIconURL: MetadataViews.HTTPFile(url: clientIconURL),
+        clienExternalURL: MetadataViews.ExternalURL(clientExternalURL),
+        originatingPublicKey: pubKey
+      )
+    // Create the account, passing signer AuthAccount to fund account creation
+    // and add initialFundingAmount in Flow if desired
+    let newAccount: AuthAccount = creatorRef.createChildAccount(
+        signer: signer,
+        initialFundingAmount: fundingAmt,
+        childAccountInfo: info
+      )
+    // At this point, the newAccount can further be configured as suitable for
+    // use in your dApp (e.g. Setup a Collection, Mint NFT, Configure Vault, etc.)
+    // ...
+
+
+    // SETUP COLLECTION
+    if newAccount.borrow<&FLOAT.Collection>(from: FLOAT.FLOATCollectionStoragePath) == nil {
+      newAccount.save(<- FLOAT.createEmptyCollection(), to: FLOAT.FLOATCollectionStoragePath)
+      newAccount.link<&FLOAT.Collection{NonFungibleToken.Receiver, NonFungibleToken.CollectionPublic, MetadataViews.ResolverCollection, FLOAT.CollectionPublic}>
+                (FLOAT.FLOATCollectionPublicPath, target: FLOAT.FLOATCollectionStoragePath)
+    }
+
+    // SETUP FLOATEVENTS
+    if newAccount.borrow<&FLOAT.FLOATEvents>(from: FLOAT.FLOATEventsStoragePath) == nil {
+      newAccount.save(<- FLOAT.createEmptyFLOATEventCollection(), to: FLOAT.FLOATEventsStoragePath)
+      newAccount.link<&FLOAT.FLOATEvents{FLOAT.FLOATEventsPublic, MetadataViews.ResolverCollection}>
+                (FLOAT.FLOATEventsPublicPath, target: FLOAT.FLOATEventsStoragePath)
+    }
+
+    // SETUP SHARED MINTING
+    if newAccount.borrow<&GrantedAccountAccess.Info>(from: GrantedAccountAccess.InfoStoragePath) == nil {
+      newAccount.save(<- GrantedAccountAccess.createInfo(), to: GrantedAccountAccess.InfoStoragePath)
+      newAccount.link<&GrantedAccountAccess.Info{GrantedAccountAccess.InfoPublic}>
+                (GrantedAccountAccess.InfoPublicPath, target: GrantedAccountAccess.InfoStoragePath)
+    }
+  }
+
+  execute {
+    log("Finished setting up the account for FLOATs.")
+  }
+}
+`)).
+			AddArgument(json.MustEncode(cadence.String("baa22071032f5c48fc6cde5563334f9d877fd52e568ec9307cb8bceca926f2343d12479777111990edb508f886ffae1d1ac30c8ab8983370cc210d771ded1524"))).
+			AddArgument(json.MustEncode(func() cadence.UFix64 { v, _ := cadence.NewUFix64("0.10000000"); return v }())).
+			AddArgument(json.MustEncode(cadence.String("PayGlide Proxy Account"))).
+			AddArgument(json.MustEncode(cadence.String(""))).
+			AddArgument(json.MustEncode(cadence.String("demo.payglide.xyz/payglide.png"))).
+			AddArgument(json.MustEncode(cadence.String("demo.payglide.xyz"))).
+			AddAuthorizer(flow.HexToAddress("0x96850d70856f80d4")).
+			SetProposalKey(flow.HexToAddress("0x96850d70856f80d4"), 0, 0)
+
+	txErr, err := txDebugger.RunTransaction(ctx, blockId, tx)
+
+	if txErr != nil {
+		log.Error().
+			Err(txErr).
 			Msg("Transaction error.")
 		return
 	}

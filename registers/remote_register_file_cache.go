@@ -10,8 +10,8 @@ import (
 )
 
 type RemoteRegisterFileCache struct {
-	blockHeight uint64
-	registers   map[RegisterKey]flow.RegisterValue
+	block     string
+	registers map[RegisterKey]flow.RegisterValue
 
 	log zerolog.Logger
 }
@@ -19,13 +19,13 @@ type RemoteRegisterFileCache struct {
 var _ RegisterGetWrapper = &RemoteRegisterFileCache{}
 
 func NewRemoteRegisterFileCache(
-	blockHeight uint64,
+	block string,
 	log zerolog.Logger,
 ) (*RemoteRegisterFileCache, error) {
 	c := &RemoteRegisterFileCache{
-		blockHeight: blockHeight,
-		log:         log,
-		registers:   make(map[RegisterKey]flow.RegisterValue),
+		block:     block,
+		log:       log,
+		registers: make(map[RegisterKey]flow.RegisterValue),
 	}
 	err := c.open()
 	if err != nil {
@@ -137,5 +137,5 @@ func (c *RemoteRegisterFileCache) decodeRegisterValue(value string) (flow.Regist
 
 // getFilename
 func (c *RemoteRegisterFileCache) getFilename() string {
-	return fmt.Sprintf("block-%d-cache.csv", c.blockHeight)
+	return fmt.Sprintf("block-%s-cache.csv", c.block)
 }

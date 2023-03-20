@@ -80,7 +80,7 @@ func (v *RemoteView) AllRegisters() []flow.RegisterID {
 }
 
 func (v *RemoteView) RegisterUpdates() ([]flow.RegisterID, []flow.RegisterValue) {
-	panic("Not implemented yet")
+	return nil, nil
 }
 
 func (v *RemoteView) Touch(owner, key string) error {
